@@ -25,6 +25,7 @@ class FiltrowanieSplotowe(ctk.CTk):
         self.mask_size_var = ctk.StringVar(value = str(MASK_SIZES[0]))
         self.filter_var = ctk.StringVar(value = FILTERS[0])
         self.sigma_var = ctk.DoubleVar(value = 1)
+        self.fast_convolution_var = ctk.BooleanVar(value = True)
 
         self._build_top_panel()
         self._build_image_panel()
@@ -63,6 +64,9 @@ class FiltrowanieSplotowe(ctk.CTk):
             top, from_=0.1, to=5.0, number_of_steps=49,  # type: ignore
             variable=self.sigma_var, command=self.update_sigma_label, width=120)
         self.sigma_slider.pack(side="left", padx=5, pady=10)
+
+        self.fastConvolution_checkbox = ctk.CTkCheckBox(top, variable=self.fast_convolution_var, text="Szybki splot")
+        self.fastConvolution_checkbox.pack(side="left", padx=5, pady=10)
 
         ctk.CTkButton(top, text="Wyczyść obraz", command=self.clear).pack(
             side="left", padx=10, pady=10)
@@ -123,7 +127,7 @@ class FiltrowanieSplotowe(ctk.CTk):
             print("Najpierw wczytaj obraz")
             return
 
-        mask_size = int(self.mask_size_var.get().split('x')[0])
+        mask_size = int(self.mask_size_var.get())
         filter_type = self.filter_var.get()
 
         print(f"Filtrowanie: {filter_type} z maską {mask_size}x{mask_size}")
@@ -146,7 +150,7 @@ class FiltrowanieSplotowe(ctk.CTk):
     # Filtry
     def filter_average(self, img_array, mask_size, **kwargs):
         kernel = np.ones((mask_size, mask_size)) / (mask_size ** 2) # stworzenie maski (n x n) i podzielenie jej przez broadcasting, żeby każdy element miał taką samą wartość
-        return self.apply_convolution(img_array, kernel, mask_size)
+        return self.apply_convolution(img_array, kernel, mask_size, fast_convolution=self.fast_convolution_var.get())
 
     def filter_gaussian(self, img_array, mask_size, sigma, **kwargs):
         half = mask_size // 2
@@ -165,7 +169,7 @@ class FiltrowanieSplotowe(ctk.CTk):
                 kernel[y][x] /= total_sum
 
         kernel_np = np.array(kernel)
-        return self.apply_convolution(img_array, kernel_np, mask_size)
+        return self.apply_convolution(img_array, kernel_np, mask_size, fast_convolution=self.fast_convolution_var.get())
 
     def filter_gaussian1d(self,img_array,sigma, **kwargs):
         half = int(np.ceil(3.0 * sigma))
@@ -180,7 +184,7 @@ class FiltrowanieSplotowe(ctk.CTk):
         kernel = -np.ones((mask_size, mask_size))
         center = mask_size // 2
         kernel[center, center] = mask_size ** 2 # dla 3x3, środek bedzie 9, reszta -8
-        return self.apply_convolution(img_array, kernel, mask_size)
+        return self.apply_convolution(img_array, kernel, mask_size, fast_convolution=self.fast_convolution_var.get())
 
     def filter_sobel(self, img_array, mask_size, **kwargs):
         if mask_size != 3:
@@ -189,8 +193,8 @@ class FiltrowanieSplotowe(ctk.CTk):
         kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
         ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
 
-        grad_x = self.apply_convolution(img_array, kx, mask_size, raw_output=True)
-        grad_y = self.apply_convolution(img_array, ky, mask_size, raw_output=True)
+        grad_x = self.apply_convolution(img_array, kx, 3, raw_output=True)
+        grad_y = self.apply_convolution(img_array, ky, 3, raw_output=True)
 
         magnitude = np.sqrt(grad_x ** 2 + grad_y ** 2)
         return np.clip(magnitude, 0, 255).astype(np.uint8)
@@ -200,36 +204,41 @@ class FiltrowanieSplotowe(ctk.CTk):
             print("Uwaga: Wymuszam maskę 3x3")
 
         kernel = np.array([[1,1,1],[1,-8,1],[1,1,1]])
-        return self.apply_convolution(img_array, kernel, 3)
+        return self.apply_convolution(
+            img_array,
+            kernel,
+            3,
+            fast_convolution=self.fast_convolution_var.get(),
+        )
 
     # Splot
     @staticmethod
-    def apply_convolution(image_array, kernel, mask_size, raw_output=False):
+    def apply_convolution(image_array, kernel, mask_size, raw_output=False, fast_convolution=True):
         pad = mask_size // 2
 
         # Dodanie marginesów
         padded_image = np.pad(image_array, ((pad, pad), (pad, pad), (0, 0)), mode='edge')
         output = np.zeros_like(image_array, dtype=np.float32)
 
-        # Przechodzimy po masce nie po obrazku
-        for i in range(mask_size):
-            for j in range(mask_size):
-                # pixel kernela * każdy pixel obrazka od pixela i,j
-                output += kernel[i, j] * padded_image[i:i + image_array.shape[0], j:j + image_array.shape[1], :]
+        if fast_convolution:# Przechodzimy po masce nie po obrazku
+            for i in range(mask_size):
+                for j in range(mask_size):
+                    # pixel kernela * każdy pixel obrazka od pixela i,j
+                    output += kernel[i, j] * padded_image[i:i + image_array.shape[0], j:j + image_array.shape[1], :]
 
-        # Przechodzenie po każdym pixelu
-        # height, width = image_array.shape[:2]
-        # k_height, k_width = kernel.shape[:2]
-        # output = np.zeros_like(image_array, dtype=np.float64)
-        # for y in range(1,height - 1):
-        #     for x in range(1,width - 1):
-        #         pixel_sum = 0.0
-        #         for ky in range(k_height):
-        #             for kx in range(k_width):
-        #                 weight = kernel[ky, kx]
-        #                 neighbor_pixel = padded_image[y + ky, x + kx]
-        #                 pixel_sum += weight * neighbor_pixel
-        #         output[y, x] = pixel_sum
+        else: # Przechodzenie po każdym pixelu
+            height, width = image_array.shape[:2]
+            k_height, k_width = kernel.shape[:2]
+            output = np.zeros_like(image_array, dtype=np.float64)
+            for y in range(1,height - 1):
+                for x in range(1,width - 1):
+                    pixel_sum = 0.0
+                    for ky in range(k_height):
+                        for kx in range(k_width):
+                            weight = kernel[ky, kx]
+                            neighbor_pixel = padded_image[y + ky, x + kx]
+                            pixel_sum += weight * neighbor_pixel
+                    output[y, x] = pixel_sum
 
         if raw_output:
             return output
@@ -254,9 +263,3 @@ class FiltrowanieSplotowe(ctk.CTk):
             final_output += k_h[0, j] * padded_h[:, j:j + image_array.shape[1],:]
 
         return np.clip(final_output, 0, 255).astype(np.uint8)
-
-if __name__ == "__main__":
-    ctk.set_appearance_mode("System")
-    ctk.set_default_color_theme("blue")
-    app = FiltrowanieSplotowe()
-    app.mainloop()
