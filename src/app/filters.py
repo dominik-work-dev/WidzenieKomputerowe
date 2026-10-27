@@ -4,13 +4,14 @@ import numpy as np
 from src.app.convolution import convolve, convolve_separable
 
 MASK_SIZES = [3, 5, 7, 9]
-
+Panels = list[tuple[str, np.ndarray]]
 
 @dataclass(frozen=True)
 class FilterParams:
     mask_size: int
     sigma: float
     fast: bool
+    alpha: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class FilterSpec:
     uses_mask: bool = True
     uses_sigma: bool = False
     uses_fast: bool = True
+    uses_alpha: bool = False
 
 
 # dodatkowe maski
@@ -77,6 +79,19 @@ def sobel(img, p):
 def laplace(img, p):
     return convolve(img, LAPLACE, fast=p.fast)
 
+
+def unsharp_mask(img, p):
+    orig = img.astype(np.float32)
+    blurred = convolve_separable(img, gaussian_kernel_1d(p.sigma)).astype(np.float32)
+    mask = orig - blurred                       # I − Gσ, wartości ze znakiem
+    result = np.clip(orig + p.alpha * mask, 0, 255).astype(np.uint8)
+
+    return [
+        ("Gσ", blurred.astype(np.uint8)),
+        ("I − Gσ (maska, +128)", np.clip(mask + 128, 0, 255).astype(np.uint8)),
+        ("U", result),
+    ]
+
 _SPECS = [
     FilterSpec("Uśredniający", average),
     FilterSpec("Gaussa", gaussian, uses_sigma=True),
@@ -84,6 +99,8 @@ _SPECS = [
     FilterSpec("Wyostrzający", sharpen),
     FilterSpec("Sobela", sobel, uses_mask=False),      # maska zawsze 3x3
     FilterSpec("Laplace", laplace, uses_mask=False),   # maska zawsze 3x3
+    FilterSpec("Unsharp Mask", unsharp_mask, uses_mask=False, uses_sigma=True,
+           uses_alpha=True, uses_fast=False),
 ]
 
 FILTERS: dict[str, FilterSpec] = {s.name: s for s in _SPECS}
